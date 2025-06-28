@@ -1,0 +1,62 @@
+# ADNS5050 Optical Mouse Sensor
+#
+# Copyright (c) 2019 Nordic Semiconductor
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+menuconfig ADNS5050
+    bool "ADNS5050 optical mouse sensor"
+  select SPI
+    help
+      Enable ADNS5050 optical mouse sensor.
+
+if ADNS5050
+
+config ADNS5050_SCROLL_TICK
+    int "ADNS5050's required ticks to produce a scroll report"
+    default 20
+    help
+      Scroll tick value.
+
+choice
+    prompt "Select ADNS5050 sensor orientation"
+    default ADNS5050_ORIENTATION_0
+
+config ADNS5050_ORIENTATION_0
+    bool "ADNS5050 not rotated"
+
+config ADNS5050_ORIENTATION_90
+    bool "ADNS5050 rotated 90 deg clockwise"
+
+config ADNS5050_ORIENTATION_180
+    bool "ADNS5050 rotated 180 deg clockwise"
+
+config ADNS5050_ORIENTATION_270
+    bool "ADNS5050 rotated 270 deg clockwise"
+
+endchoice
+
+config ADNS5050_INVERT_X
+  bool "Invert the X axis of ADNS5050 sensor"
+
+config ADNS5050_INVERT_Y
+  bool "Invert the Y axis of ADNS5050 sensor"
+
+config ADNS5050_INVERT_SCROLL_X
+  bool "Invert the X axis of the scroll"
+  default ADNS5050_INVERT_X
+
+config ADNS5050_INVERT_SCROLL_Y
+  bool "Invert the Y axis of the scroll"
+  default ADNS5050_INVERT_Y
+
+config ADNS5050_AUTOMOUSE_TIMEOUT_MS
+  int "Amount of milliseconds the mouse layer will be active after using the trackball"
+  default 400
+
+module = ADNS5050
+module-str = ADNS5050
+source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
+
+endif #ADNS5050

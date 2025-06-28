@@ -1,0 +1,20 @@
+description: |
+  Sensor driver for the ADNS5050 optical mouse sensor 
+
+compatible: "pixart,adns5050"
+
+include: spi-device.yaml
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
+  scroll-layers:
+    type: array
+    default: []
+  snipe-layers:
+    type: array
+    default: []
+  automouse-layer:
+    type: int
+    default: -1
