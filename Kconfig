@@ -51,6 +51,13 @@ config ADNS5050_INVERT_SCROLL_Y
   bool "Invert the Y axis of the scroll"
   default ADNS5050_INVERT_Y
 
+config ADNS5050_POLLING_INTERVAL_MS
+  int "ADNS5050 polling interval in milliseconds"
+  default 8
+  help
+    How often to poll the ADNS5050 sensor for motion data.
+    Default 8ms provides 125Hz polling rate for good responsiveness.
+
 config ADNS5050_AUTOMOUSE_TIMEOUT_MS
   int "Amount of milliseconds the mouse layer will be active after using the trackball"
   default 400

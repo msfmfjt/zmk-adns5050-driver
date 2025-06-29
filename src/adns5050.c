@@ -249,14 +249,6 @@ static int set_downshift_time(const struct device *dev, uint8_t reg_addr, uint32
     return 0;
 }
 
-static void set_interrupt(const struct device *dev, const bool en) {
-    const struct pixart_config *config = dev->config;
-    int ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio,
-                                              en ? GPIO_INT_LEVEL_ACTIVE : GPIO_INT_DISABLE);
-    if (ret < 0) {
-        LOG_ERR("can't set interrupt");
-    }
-}
 
 static int adns5050_async_init_power_up(const struct device *dev) {
     LOG_INF("ADNS5050 async_init_power_up");
@@ -323,7 +315,9 @@ static void adns5050_async_init(struct k_work *work) {
         if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
             data->ready = true; // sensor is ready to work
             LOG_INF("ADNS5050 initialized");
-            set_interrupt(dev, true);
+            // Start polling timer
+            k_timer_start(&data->polling_timer, K_MSEC(CONFIG_ADNS5050_POLLING_INTERVAL_MS), 
+                         K_MSEC(CONFIG_ADNS5050_POLLING_INTERVAL_MS));
         } else {
             k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
         }
@@ -450,57 +444,21 @@ static int adns5050_report_data(const struct device *dev) {
     return err;
 }
 
-static void adns5050_gpio_callback(const struct device *gpiob, struct gpio_callback *cb,
-                                  uint32_t pins) {
-    struct pixart_data *data = CONTAINER_OF(cb, struct pixart_data, irq_gpio_cb);
-    const struct device *dev = data->dev;
-
-    set_interrupt(dev, false);
-
-    // submit the real handler work
-    k_work_submit(&data->trigger_work);
-}
 
 static void adns5050_work_callback(struct k_work *work) {
     struct pixart_data *data = CONTAINER_OF(work, struct pixart_data, trigger_work);
     const struct device *dev = data->dev;
 
     adns5050_report_data(dev);
-    set_interrupt(dev, true);
 }
 
-static int adns5050_init_irq(const struct device *dev) {
-    LOG_INF("Configure ADNS5050 irq...");
-
-    int err;
-    struct pixart_data *data = dev->data;
-    const struct pixart_config *config = dev->config;
-
-    // check readiness of irq gpio pin
-    if (!device_is_ready(config->irq_gpio.port)) {
-        LOG_ERR("IRQ GPIO device not ready");
-        return -ENODEV;
-    }
-
-    // init the irq pin
-    err = gpio_pin_configure_dt(&config->irq_gpio, GPIO_INPUT);
-    if (err) {
-        LOG_ERR("Cannot configure IRQ GPIO");
-        return err;
-    }
-
-    // setup and add the irq callback associated
-    gpio_init_callback(&data->irq_gpio_cb, adns5050_gpio_callback, BIT(config->irq_gpio.pin));
-
-    err = gpio_add_callback(config->irq_gpio.port, &data->irq_gpio_cb);
-    if (err) {
-        LOG_ERR("Cannot add IRQ GPIO callback");
-    }
-
-    LOG_INF("Configure ADNS5050 irq done");
-
-    return err;
+static void adns5050_polling_callback(struct k_timer *timer) {
+    struct pixart_data *data = CONTAINER_OF(timer, struct pixart_data, polling_timer);
+    
+    // Submit work to process motion data
+    k_work_submit(&data->trigger_work);
 }
+
 
 static int adns5050_init(const struct device *dev) {
     LOG_INF("Start initializing ADNS5050...");
@@ -518,6 +476,9 @@ static int adns5050_init(const struct device *dev) {
     // init trigger handler work
     k_work_init(&data->trigger_work, adns5050_work_callback);
 
+    // init polling timer
+    k_timer_init(&data->polling_timer, adns5050_polling_callback, NULL);
+
     // check readiness of cs gpio pin and init it to inactive
     if (!device_is_ready(config->cs_gpio.port)) {
         LOG_ERR("SPI CS device not ready");
@@ -527,12 +488,6 @@ static int adns5050_init(const struct device *dev) {
     err = gpio_pin_configure_dt(&config->cs_gpio, GPIO_OUTPUT_INACTIVE);
     if (err) {
         LOG_ERR("Cannot configure SPI CS GPIO");
-        return err;
-    }
-
-    // init irq routine
-    err = adns5050_init_irq(dev);
-    if (err) {
         return err;
     }
 
@@ -551,7 +506,6 @@ static int adns5050_init(const struct device *dev) {
     static int32_t scroll_layers##n[] = DT_PROP(DT_DRV_INST(n), scroll_layers);                    \
     static int32_t snipe_layers##n[] = DT_PROP(DT_DRV_INST(n), snipe_layers);                      \
     static const struct pixart_config config##n = {                                                \
-        .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
         .bus =                                                                                     \
             {                                                                                      \
                 .bus = DEVICE_DT_GET(DT_INST_BUS(n)),                                              \

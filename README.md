@@ -5,6 +5,8 @@ This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan
 ## Features
 
 - Simplified implementation optimized for ADNS5050
+- **Polling-based operation** (no IRQ pin required)
+- Configurable polling interval (default 8ms for 125Hz)
 - Support for scroll layers and snipe layers
 - Configurable sensor orientation
 - X/Y axis inversion support
@@ -80,7 +82,6 @@ Now, update your `board.overlay` adding the necessary bits (update the pins for 
         compatible = "pixart,adns5050";
         reg = <0>;
         spi-max-frequency = <2000000>;
-        irq-gpios = <&gpio0 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 
         /*   optional features   */
         // snipe-layers = <1>;
@@ -105,4 +106,6 @@ CONFIG_SPI=y
 CONFIG_INPUT=y
 CONFIG_ZMK_MOUSE=y
 CONFIG_ADNS5050=y
+# Optional: Set polling interval (default 8ms = 125Hz)
+# CONFIG_ADNS5050_POLLING_INTERVAL_MS=8
 ```

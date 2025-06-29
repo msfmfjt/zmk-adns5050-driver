@@ -28,8 +28,8 @@ struct pixart_data {
 
     // ADNS5050 doesn't support configurable polling rate
 
-    // motion interrupt isr
-    struct gpio_callback irq_gpio_cb;
+    // polling timer for motion detection
+    struct k_timer polling_timer;
     // the work structure holding the trigger job
     struct k_work trigger_work;
 
@@ -48,7 +48,6 @@ struct pixart_data {
 
 // device config data structure
 struct pixart_config {
-    struct gpio_dt_spec irq_gpio;
     struct spi_dt_spec bus;
     struct gpio_dt_spec cs_gpio;
     size_t scroll_layers_len;
