@@ -1,14 +1,12 @@
 description: |
-  Sensor driver for the ADNS5050 optical mouse sensor 
+  Sensor driver for the ADNS5050 optical mouse sensor
+  Uses polling-based operation (no IRQ pin required)
 
 compatible: "pixart,adns5050"
 
 include: spi-device.yaml
 
 properties:
-  irq-gpios:
-    type: phandle-array
-    required: true
   scroll-layers:
     type: array
     default: []
