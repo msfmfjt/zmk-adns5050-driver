@@ -6,11 +6,6 @@
 
 #define DT_DRV_COMPAT pixart_adns5050
 
-// Compile-time check
-#if DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 0
-#warning "No ADNS5050 devices found in device tree!"
-#endif
-
 // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
 #define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
@@ -466,12 +461,15 @@ static void adns5050_polling_callback(struct k_timer *timer) {
 
 
 static int adns5050_init(const struct device *dev) {
-    printk("ADNS5050: Driver init function called!\n");
+    printk("ADNS5050: Driver init function called for device %s!\n", dev->name);
     LOG_INF("Start initializing ADNS5050...");
 
     struct pixart_data *data = dev->data;
     const struct pixart_config *config = dev->config;
     int err;
+
+    printk("ADNS5050: SPI bus frequency: %d Hz\n", config->bus.config.frequency);
+    printk("ADNS5050: CS GPIO port: %p, pin: %d\n", config->cs_gpio.port, config->cs_gpio.pin);
 
     // init device pointer
     data->dev = dev;
