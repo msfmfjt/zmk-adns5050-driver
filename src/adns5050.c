@@ -271,8 +271,35 @@ static int adns5050_async_init_power_up(const struct device *dev) {
 
 static int adns5050_async_init_configure(const struct device *dev) {
     LOG_INF("ADNS5050 async_init_configure");
+    const struct pixart_config *config = dev->config;
 
     int err = 0;
+
+    // Test CS GPIO functionality
+    printk("ADNS5050: Testing CS GPIO control...\n");
+    err = gpio_pin_set_dt(&config->cs_gpio, 1);
+    if (err) {
+        printk("ADNS5050: CS GPIO set HIGH failed: %d\n", err);
+    } else {
+        printk("ADNS5050: CS GPIO set HIGH successful\n");
+    }
+    
+    k_msleep(1);
+    
+    err = gpio_pin_set_dt(&config->cs_gpio, 0);
+    if (err) {
+        printk("ADNS5050: CS GPIO set LOW failed: %d\n", err);
+    } else {
+        printk("ADNS5050: CS GPIO set LOW successful\n");
+    }
+
+    // Check SPI bus readiness
+    if (!device_is_ready(config->bus.bus)) {
+        printk("ADNS5050: SPI bus device is NOT ready!\n");
+        return -ENODEV;
+    } else {
+        printk("ADNS5050: SPI bus device is ready\n");
+    }
 
     // Check product ID
     err = check_product_id(dev);
