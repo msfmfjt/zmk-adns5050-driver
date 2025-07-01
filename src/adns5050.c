@@ -206,17 +206,23 @@ static int motion_burst_read_legacy(const struct device *dev, uint8_t *buf, size
 
 static int check_product_id(const struct device *dev) {
     uint8_t product_id = 0x01;
+    
+    printk("ADNS5050: Attempting to read product ID...\n");
     int err = reg_read(dev, ADNS5050_REG_PRODUCT_ID, &product_id);
     if (err) {
+        printk("ADNS5050: SPI read error: %d\n", err);
         LOG_ERR("Cannot obtain product id");
         return err;
     }
 
+    printk("ADNS5050: Read product ID: 0x%02x (expected: 0x%02x)\n", product_id, ADNS5050_PRODUCT_ID);
+    
     if (product_id != ADNS5050_PRODUCT_ID) {
         LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, ADNS5050_PRODUCT_ID);
         return -EIO;
     }
 
+    printk("ADNS5050: Product ID verification successful!\n");
     return 0;
 }
 
