@@ -6,6 +6,11 @@
 
 #define DT_DRV_COMPAT pixart_adns5050
 
+// Compile-time check
+#if DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 0
+#warning "No ADNS5050 devices found in device tree!"
+#endif
+
 // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
 #define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
@@ -17,7 +22,7 @@
 #include "adns5050.h"
 
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(adns5050, CONFIG_INPUT_LOG_LEVEL);
+LOG_MODULE_REGISTER(adns5050, CONFIG_ADNS5050_LOG_LEVEL);
 
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
@@ -461,6 +466,7 @@ static void adns5050_polling_callback(struct k_timer *timer) {
 
 
 static int adns5050_init(const struct device *dev) {
+    printk("ADNS5050: Driver init function called!\n");
     LOG_INF("Start initializing ADNS5050...");
 
     struct pixart_data *data = dev->data;
@@ -503,8 +509,8 @@ static int adns5050_init(const struct device *dev) {
 
 #define ADNS5050_DEFINE(n)                                                                          \
     static struct pixart_data data##n;                                                             \
-    static int32_t scroll_layers##n[] = DT_PROP(DT_DRV_INST(n), scroll_layers);                    \
-    static int32_t snipe_layers##n[] = DT_PROP(DT_DRV_INST(n), snipe_layers);                      \
+    static int32_t scroll_layers##n[] = DT_PROP_OR(DT_DRV_INST(n), scroll_layers, {});             \
+    static int32_t snipe_layers##n[] = DT_PROP_OR(DT_DRV_INST(n), snipe_layers, {});               \
     static const struct pixart_config config##n = {                                                \
         .bus =                                                                                     \
             {                                                                                      \
@@ -519,9 +525,9 @@ static int adns5050_init(const struct device *dev) {
             },                                                                                     \
         .cs_gpio = SPI_CS_GPIOS_DT_SPEC_GET(DT_DRV_INST(n)),                                       \
         .scroll_layers = scroll_layers##n,                                                         \
-        .scroll_layers_len = DT_PROP_LEN(DT_DRV_INST(n), scroll_layers),                           \
+        .scroll_layers_len = DT_PROP_LEN_OR(DT_DRV_INST(n), scroll_layers, 0),                     \
         .snipe_layers = snipe_layers##n,                                                           \
-        .snipe_layers_len = DT_PROP_LEN(DT_DRV_INST(n), snipe_layers),                             \
+        .snipe_layers_len = DT_PROP_LEN_OR(DT_DRV_INST(n), snipe_layers, 0),                       \
     };                                                                                             \
                                                                                                    \
     DEVICE_DT_INST_DEFINE(n, adns5050_init, NULL, &data##n, &config##n, POST_KERNEL,                \
