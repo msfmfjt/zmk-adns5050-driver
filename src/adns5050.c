@@ -428,7 +428,7 @@ static int adns5050_report_data(const struct device *dev) {
         return -EBUSY;
     }
 
-    int32_t dividor = 1; // ADNS5050 doesn't need CPI division
+    // ADNS5050 doesn't need CPI division, use fixed resolution
     enum pixart_input_mode input_mode = get_input_mode_for_current_layer(dev);
     bool input_mode_changed = data->curr_mode != input_mode;
     
@@ -591,21 +591,24 @@ static int adns5050_init(const struct device *dev) {
     return err;
 }
 
-#define ADNS5050_DEFINE(n)                                                                          \
-    static struct pixart_data data##n;                                                             \
-    static int32_t scroll_layers##n[] = DT_PROP_OR(DT_DRV_INST(n), scroll_layers, {});             \
-    static int32_t snipe_layers##n[] = DT_PROP_OR(DT_DRV_INST(n), snipe_layers, {});               \
-    static const struct pixart_config config##n = {                                                \
-        .sclk_gpio = GPIO_DT_SPEC_INST_GET(n, sclk_gpios),                                          \
-        .sdio_gpio = GPIO_DT_SPEC_INST_GET(n, sdio_gpios),                                          \
-        .cs_gpio = GPIO_DT_SPEC_INST_GET(n, cs_gpios),                                              \
-        .scroll_layers = scroll_layers##n,                                                         \
-        .scroll_layers_len = DT_PROP_LEN_OR(DT_DRV_INST(n), scroll_layers, 0),                     \
-        .snipe_layers = snipe_layers##n,                                                           \
-        .snipe_layers_len = DT_PROP_LEN_OR(DT_DRV_INST(n), snipe_layers, 0),                       \
-    };                                                                                             \
-                                                                                                   \
-    DEVICE_DT_INST_DEFINE(n, adns5050_init, NULL, &data##n, &config##n, POST_KERNEL,                \
-                          CONFIG_SENSOR_INIT_PRIORITY, NULL);
+// Define the device using the DT node directly (not instance-based)
+#define TRACKBALL_NODE DT_NODELABEL(trackball)
 
-DT_INST_FOREACH_STATUS_OKAY(ADNS5050_DEFINE)
+#if DT_NODE_EXISTS(TRACKBALL_NODE)
+static struct pixart_data trackball_data;
+static int32_t trackball_scroll_layers[] = DT_PROP_OR(TRACKBALL_NODE, scroll_layers, {});
+static int32_t trackball_snipe_layers[] = DT_PROP_OR(TRACKBALL_NODE, snipe_layers, {});
+
+static const struct pixart_config trackball_config = {
+    .sclk_gpio = GPIO_DT_SPEC_GET(TRACKBALL_NODE, sclk_gpios),
+    .sdio_gpio = GPIO_DT_SPEC_GET(TRACKBALL_NODE, sdio_gpios),
+    .cs_gpio = GPIO_DT_SPEC_GET(TRACKBALL_NODE, cs_gpios),
+    .scroll_layers = trackball_scroll_layers,
+    .scroll_layers_len = DT_PROP_LEN_OR(TRACKBALL_NODE, scroll_layers, 0),
+    .snipe_layers = trackball_snipe_layers,
+    .snipe_layers_len = DT_PROP_LEN_OR(TRACKBALL_NODE, snipe_layers, 0),
+};
+
+DEVICE_DT_DEFINE(TRACKBALL_NODE, adns5050_init, NULL, &trackball_data, &trackball_config, 
+                 POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY, NULL);
+#endif
