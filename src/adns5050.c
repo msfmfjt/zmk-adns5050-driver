@@ -130,7 +130,7 @@ static int reg_read(const struct device *dev, uint8_t reg, uint8_t *buf) {
     
     // Send register address (read command)
     adns5050_serial_write(dev, reg);
-    k_busy_wait(100); // 100μs delay (t_SRAD from QMK)
+    k_busy_wait(160); // 160μs delay (increased for better stability)
     
     // Read data
     *buf = adns5050_serial_read(dev);
@@ -219,16 +219,28 @@ static int check_product_id(const struct device *dev) {
     
     printk("ADNS5050: Attempting to read product ID...\n");
     
-    // Add extra stabilization time
-    k_msleep(100);
+    // Extended stabilization time after reset
+    k_msleep(200);
     
-    // Try multiple reads with different timings
-    for (int attempt = 0; attempt < 3; attempt++) {
+    // Wake up device with multiple dummy reads
+    uint8_t dummy;
+    for (int i = 0; i < 3; i++) {
+        reg_read(dev, ADNS5050_REG_MOTION, &dummy);
+        k_msleep(10);
+    }
+    
+    // Try multiple reads with increasing delays
+    for (int attempt = 0; attempt < 5; attempt++) {
         printk("ADNS5050: Read attempt %d\n", attempt + 1);
+        
+        // Additional wake-up read before product ID read
+        reg_read(dev, ADNS5050_REG_MOTION, &dummy);
+        k_msleep(20);
         
         int err = reg_read(dev, ADNS5050_REG_PRODUCT_ID, &product_id);
         if (err) {
-            printk("ADNS5050: SPI read error: %d\n", err);
+            printk("ADNS5050: GPIO read error: %d\n", err);
+            k_msleep(100);
             continue;
         }
         
@@ -240,8 +252,8 @@ static int check_product_id(const struct device *dev) {
             return 0;
         }
         
-        // Wait between attempts
-        k_msleep(50);
+        // Progressive delay increase
+        k_msleep(50 + (attempt * 25));
     }
 
     LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, ADNS5050_PRODUCT_ID);
@@ -281,12 +293,18 @@ static int set_downshift_time(const struct device *dev, uint8_t reg_addr, uint32
 static int adns5050_async_init_power_up(const struct device *dev) {
     LOG_INF("ADNS5050 async_init_power_up");
 
-    /* Reset GPIO state */
+    /* Reset GPIO state and ensure clean startup */
     adns5050_cs_deselect(dev);
-    k_msleep(1);
+    k_msleep(10); // Increased delay for power stabilization
     adns5050_cs_select(dev);
-    k_msleep(1);
+    k_msleep(10);
     adns5050_cs_deselect(dev);
+    k_msleep(10);
+
+    /* Wake up device with dummy read before reset */
+    uint8_t dummy;
+    reg_read(dev, ADNS5050_REG_PRODUCT_ID, &dummy);
+    k_msleep(50);
 
     /* Reset the ADNS5050 chip */
     return reg_write(dev, ADNS5050_REG_CHIP_RESET, ADNS5050_RESET_CMD);
