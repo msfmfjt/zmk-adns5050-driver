@@ -7,7 +7,6 @@
  */
 
 #include <zephyr/device.h>
-#include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 
@@ -48,8 +47,9 @@ struct pixart_data {
 
 // device config data structure
 struct pixart_config {
-    struct spi_dt_spec bus;
-    struct gpio_dt_spec cs_gpio;
+    struct gpio_dt_spec sclk_gpio;    // Serial clock pin
+    struct gpio_dt_spec sdio_gpio;    // Serial data I/O pin (bidirectional)
+    struct gpio_dt_spec cs_gpio;      // Chip select pin
     size_t scroll_layers_len;
     int32_t *scroll_layers;
     size_t snipe_layers_len;

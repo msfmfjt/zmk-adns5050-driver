@@ -13,11 +13,87 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/input/input.h>
+#include <zephyr/drivers/gpio.h>
 #include <zmk/keymap.h>
 #include "adns5050.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(adns5050, CONFIG_ADNS5050_LOG_LEVEL);
+
+// GPIO bit-banging control functions (based on QMK implementation)
+static void adns5050_cs_select(const struct device *dev);
+static void adns5050_cs_deselect(const struct device *dev);
+static void adns5050_serial_write(const struct device *dev, uint8_t data);
+static uint8_t adns5050_serial_read(const struct device *dev);
+
+// GPIO bit-banging implementation
+static void adns5050_cs_select(const struct device *dev) {
+    const struct pixart_config *config = dev->config;
+    gpio_pin_set_dt(&config->cs_gpio, 0);  // CS active low
+}
+
+static void adns5050_cs_deselect(const struct device *dev) {
+    const struct pixart_config *config = dev->config;
+    gpio_pin_set_dt(&config->cs_gpio, 1);  // CS inactive high
+}
+
+static void adns5050_serial_write(const struct device *dev, uint8_t data) {
+    const struct pixart_config *config = dev->config;
+    
+    // Configure SDIO as output for writing
+    gpio_pin_configure_dt(&config->sdio_gpio, GPIO_OUTPUT);
+    
+    // Send 8 bits, MSB first
+    for (int i = 7; i >= 0; i--) {
+        // Set clock low
+        gpio_pin_set_dt(&config->sclk_gpio, 0);
+        k_busy_wait(1); // 1μs delay
+        
+        // Set data bit
+        gpio_pin_set_dt(&config->sdio_gpio, (data >> i) & 1);
+        k_busy_wait(1); // 1μs delay
+        
+        // Set clock high
+        gpio_pin_set_dt(&config->sclk_gpio, 1);
+        k_busy_wait(1); // 1μs delay
+    }
+    
+    // Leave clock low after transmission
+    gpio_pin_set_dt(&config->sclk_gpio, 0);
+    k_busy_wait(1);
+}
+
+static uint8_t adns5050_serial_read(const struct device *dev) {
+    const struct pixart_config *config = dev->config;
+    uint8_t data = 0;
+    
+    // Configure SDIO as input for reading
+    gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT);
+    
+    // Read 8 bits, MSB first
+    for (int i = 7; i >= 0; i--) {
+        // Set clock low
+        gpio_pin_set_dt(&config->sclk_gpio, 0);
+        k_busy_wait(1); // 1μs delay
+        
+        // Set clock high
+        gpio_pin_set_dt(&config->sclk_gpio, 1);
+        k_busy_wait(1); // 1μs delay
+        
+        // Read data bit
+        if (gpio_pin_get_dt(&config->sdio_gpio)) {
+            data |= (1 << i);
+        }
+        
+        k_busy_wait(1); // 1μs delay
+    }
+    
+    // Leave clock low after transmission
+    gpio_pin_set_dt(&config->sclk_gpio, 0);
+    k_busy_wait(1);
+    
+    return data;
+}
 
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
@@ -44,117 +120,51 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 //////// Function definitions //////////
 
-// checked and keep
-static int spi_cs_ctrl(const struct device *dev, bool enable) {
-    const struct pixart_config *config = dev->config;
-    int err;
-
-    if (!enable) {
-        k_busy_wait(T_NCS_SCLK);
-    }
-
-    err = gpio_pin_set_dt(&config->cs_gpio, (int)enable);
-    if (err) {
-        LOG_ERR("SPI CS ctrl failed");
-    }
-
-    if (enable) {
-        k_busy_wait(T_NCS_SCLK);
-    }
-
-    return err;
-}
-
-// checked and keep
+// GPIO-based register read function
 static int reg_read(const struct device *dev, uint8_t reg, uint8_t *buf) {
-    int err;
-    /* struct pixart_data *data = dev->data; */
-    const struct pixart_config *config = dev->config;
-
-    __ASSERT_NO_MSG((reg & SPI_WRITE_BIT) == 0);
-
-    err = spi_cs_ctrl(dev, true);
-    if (err) {
-        return err;
-    }
-
-    /* Write register address. */
-    const struct spi_buf tx_buf = {.buf = &reg, .len = 1};
-    const struct spi_buf_set tx = {.buffers = &tx_buf, .count = 1};
-
-    err = spi_write_dt(&config->bus, &tx);
-    if (err) {
-        LOG_ERR("Reg read failed on SPI write");
-        return err;
-    }
-
-    k_busy_wait(T_SRAD);
-
-    /* Read register value. */
-    struct spi_buf rx_buf = {
-        .buf = buf,
-        .len = 1,
-    };
-    const struct spi_buf_set rx = {
-        .buffers = &rx_buf,
-        .count = 1,
-    };
-
-    err = spi_read_dt(&config->bus, &rx);
-    if (err) {
-        LOG_ERR("Reg read failed on SPI read");
-        return err;
-    }
-
-    err = spi_cs_ctrl(dev, false);
-    if (err) {
-        return err;
-    }
-
-    k_busy_wait(T_SRX);
-
+    printk("ADNS5050: GPIO reg_read - register 0x%02x\\n", reg);
+    
+    // Select chip
+    adns5050_cs_select(dev);
+    k_busy_wait(1); // 1μs delay after CS select
+    
+    // Send register address (read command)
+    adns5050_serial_write(dev, reg);
+    k_busy_wait(100); // 100μs delay (t_SRAD from QMK)
+    
+    // Read data
+    *buf = adns5050_serial_read(dev);
+    
+    // Deselect chip
+    adns5050_cs_deselect(dev);
+    k_busy_wait(20); // 20μs delay (t_SRX from QMK)
+    
+    printk("ADNS5050: GPIO reg_read - register 0x%02x = 0x%02x\\n", reg, *buf);
     return 0;
 }
 
-// primitive write without enable/disable spi clock on the sensor
-static int _reg_write(const struct device *dev, uint8_t reg, uint8_t val) {
-    int err;
-    /* struct pixart_data *data = dev->data; */
-    const struct pixart_config *config = dev->config;
-
-    __ASSERT_NO_MSG((reg & SPI_WRITE_BIT) == 0);
-
-    err = spi_cs_ctrl(dev, true);
-    if (err) {
-        return err;
-    }
-
-    uint8_t buf[] = {SPI_WRITE_BIT | reg, val};
-    const struct spi_buf tx_buf = {.buf = buf, .len = ARRAY_SIZE(buf)};
-    const struct spi_buf_set tx = {.buffers = &tx_buf, .count = 1};
-
-    err = spi_write_dt(&config->bus, &tx);
-    if (err) {
-        LOG_ERR("Reg write failed on SPI write");
-        return err;
-    }
-
-    k_busy_wait(T_SCLK_NCS_WR);
-
-    err = spi_cs_ctrl(dev, false);
-    if (err) {
-        return err;
-    }
-
-    k_busy_wait(T_SWX);
-
-    return 0;
-}
-
+// GPIO-based register write function
 static int reg_write(const struct device *dev, uint8_t reg, uint8_t val) {
-    // ADNS5050 doesn't need SPI clock management
-    return _reg_write(dev, reg, val);
+    printk("ADNS5050: GPIO reg_write - register 0x%02x = 0x%02x\\n", reg, val);
+    
+    // Select chip
+    adns5050_cs_select(dev);
+    k_busy_wait(1); // 1μs delay after CS select
+    
+    // Send register address with write bit (0x80)
+    adns5050_serial_write(dev, reg | 0x80);
+    
+    // Send data
+    adns5050_serial_write(dev, val);
+    k_busy_wait(35); // 35μs delay (t_SCLK_NCS_WR from QMK)
+    
+    // Deselect chip
+    adns5050_cs_deselect(dev);
+    k_busy_wait(180); // 180μs delay (t_SWX from QMK)
+    
+    return 0;
 }
+
 
 static int motion_read(const struct device *dev, int16_t *delta_x, int16_t *delta_y) {
     int err;
@@ -208,22 +218,34 @@ static int check_product_id(const struct device *dev) {
     uint8_t product_id = 0x01;
     
     printk("ADNS5050: Attempting to read product ID...\n");
-    int err = reg_read(dev, ADNS5050_REG_PRODUCT_ID, &product_id);
-    if (err) {
-        printk("ADNS5050: SPI read error: %d\n", err);
-        LOG_ERR("Cannot obtain product id");
-        return err;
-    }
-
-    printk("ADNS5050: Read product ID: 0x%02x (expected: 0x%02x)\n", product_id, ADNS5050_PRODUCT_ID);
     
-    if (product_id != ADNS5050_PRODUCT_ID) {
-        LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, ADNS5050_PRODUCT_ID);
-        return -EIO;
+    // Add extra stabilization time
+    k_msleep(100);
+    
+    // Try multiple reads with different timings
+    for (int attempt = 0; attempt < 3; attempt++) {
+        printk("ADNS5050: Read attempt %d\n", attempt + 1);
+        
+        int err = reg_read(dev, ADNS5050_REG_PRODUCT_ID, &product_id);
+        if (err) {
+            printk("ADNS5050: SPI read error: %d\n", err);
+            continue;
+        }
+        
+        printk("ADNS5050: Attempt %d - Read product ID: 0x%02x (expected: 0x%02x)\n", 
+               attempt + 1, product_id, ADNS5050_PRODUCT_ID);
+               
+        if (product_id == ADNS5050_PRODUCT_ID) {
+            printk("ADNS5050: Product ID verification successful!\n");
+            return 0;
+        }
+        
+        // Wait between attempts
+        k_msleep(50);
     }
 
-    printk("ADNS5050: Product ID verification successful!\n");
-    return 0;
+    LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, ADNS5050_PRODUCT_ID);
+    return -EIO;
 }
 
 // ADNS5050 has a fixed resolution and doesn't support CPI configuration
@@ -259,9 +281,12 @@ static int set_downshift_time(const struct device *dev, uint8_t reg_addr, uint32
 static int adns5050_async_init_power_up(const struct device *dev) {
     LOG_INF("ADNS5050 async_init_power_up");
 
-    /* Reset spi port */
-    spi_cs_ctrl(dev, false);
-    spi_cs_ctrl(dev, true);
+    /* Reset GPIO state */
+    adns5050_cs_deselect(dev);
+    k_msleep(1);
+    adns5050_cs_select(dev);
+    k_msleep(1);
+    adns5050_cs_deselect(dev);
 
     /* Reset the ADNS5050 chip */
     return reg_write(dev, ADNS5050_REG_CHIP_RESET, ADNS5050_RESET_CMD);
@@ -293,13 +318,16 @@ static int adns5050_async_init_configure(const struct device *dev) {
         printk("ADNS5050: CS GPIO set LOW successful\n");
     }
 
-    // Check SPI bus readiness
-    if (!device_is_ready(config->bus.bus)) {
-        printk("ADNS5050: SPI bus device is NOT ready!\n");
+    // Check GPIO readiness
+    if (!device_is_ready(config->sclk_gpio.port)) {
+        printk("ADNS5050: SCLK GPIO device is NOT ready!\n");
         return -ENODEV;
-    } else {
-        printk("ADNS5050: SPI bus device is ready\n");
     }
+    if (!device_is_ready(config->sdio_gpio.port)) {
+        printk("ADNS5050: SDIO GPIO device is NOT ready!\n");
+        return -ENODEV;
+    }
+    printk("ADNS5050: All GPIO devices are ready\n");
 
     // Check product ID
     err = check_product_id(dev);
@@ -501,8 +529,10 @@ static int adns5050_init(const struct device *dev) {
     const struct pixart_config *config = dev->config;
     int err;
 
-    printk("ADNS5050: SPI bus frequency: %d Hz\n", config->bus.config.frequency);
-    printk("ADNS5050: CS GPIO port: %p, pin: %d\n", config->cs_gpio.port, config->cs_gpio.pin);
+    printk("ADNS5050: GPIO pins - SCLK: %p:%d, SDIO: %p:%d, CS: %p:%d\n", 
+           config->sclk_gpio.port, config->sclk_gpio.pin,
+           config->sdio_gpio.port, config->sdio_gpio.pin,
+           config->cs_gpio.port, config->cs_gpio.pin);
 
     // init device pointer
     data->dev = dev;
@@ -516,15 +546,38 @@ static int adns5050_init(const struct device *dev) {
     // init polling timer
     k_timer_init(&data->polling_timer, adns5050_polling_callback, NULL);
 
-    // check readiness of cs gpio pin and init it to inactive
+    // Configure GPIO pins
     if (!device_is_ready(config->cs_gpio.port)) {
-        LOG_ERR("SPI CS device not ready");
+        LOG_ERR("CS GPIO device not ready");
+        return -ENODEV;
+    }
+    if (!device_is_ready(config->sclk_gpio.port)) {
+        LOG_ERR("SCLK GPIO device not ready");
+        return -ENODEV;
+    }
+    if (!device_is_ready(config->sdio_gpio.port)) {
+        LOG_ERR("SDIO GPIO device not ready");
         return -ENODEV;
     }
 
+    // Configure CS pin as output (inactive high)
     err = gpio_pin_configure_dt(&config->cs_gpio, GPIO_OUTPUT_INACTIVE);
     if (err) {
-        LOG_ERR("Cannot configure SPI CS GPIO");
+        LOG_ERR("Cannot configure CS GPIO");
+        return err;
+    }
+
+    // Configure SCLK pin as output (initially low)
+    err = gpio_pin_configure_dt(&config->sclk_gpio, GPIO_OUTPUT_INACTIVE);
+    if (err) {
+        LOG_ERR("Cannot configure SCLK GPIO");
+        return err;
+    }
+
+    // Configure SDIO pin as output initially (will be switched to input during reads)
+    err = gpio_pin_configure_dt(&config->sdio_gpio, GPIO_OUTPUT);
+    if (err) {
+        LOG_ERR("Cannot configure SDIO GPIO");
         return err;
     }
 
@@ -543,18 +596,9 @@ static int adns5050_init(const struct device *dev) {
     static int32_t scroll_layers##n[] = DT_PROP_OR(DT_DRV_INST(n), scroll_layers, {});             \
     static int32_t snipe_layers##n[] = DT_PROP_OR(DT_DRV_INST(n), snipe_layers, {});               \
     static const struct pixart_config config##n = {                                                \
-        .bus =                                                                                     \
-            {                                                                                      \
-                .bus = DEVICE_DT_GET(DT_INST_BUS(n)),                                              \
-                .config =                                                                          \
-                    {                                                                              \
-                        .frequency = DT_INST_PROP(n, spi_max_frequency),                           \
-                        .operation =                                                               \
-                            SPI_WORD_SET(8) | SPI_TRANSFER_LSB,    \
-                        .slave = DT_INST_REG_ADDR(n),                                              \
-                    },                                                                             \
-            },                                                                                     \
-        .cs_gpio = SPI_CS_GPIOS_DT_SPEC_GET(DT_DRV_INST(n)),                                       \
+        .sclk_gpio = GPIO_DT_SPEC_INST_GET(n, sclk_gpios),                                          \
+        .sdio_gpio = GPIO_DT_SPEC_INST_GET(n, sdio_gpios),                                          \
+        .cs_gpio = GPIO_DT_SPEC_INST_GET(n, cs_gpios),                                              \
         .scroll_layers = scroll_layers##n,                                                         \
         .scroll_layers_len = DT_PROP_LEN_OR(DT_DRV_INST(n), scroll_layers, 0),                     \
         .snipe_layers = snipe_layers##n,                                                           \
