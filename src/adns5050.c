@@ -78,9 +78,24 @@ static uint8_t adns5050_serial_read(const struct device *dev) {
     const struct pixart_config *config = dev->config;
     uint8_t data = 0;
     
+    // Try different pull configurations for debugging
+    printk("ADNS5050: Testing SDIO states during read:\n");
+    
+    // Test with pull-down first
+    gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT | GPIO_PULL_DOWN);
+    k_busy_wait(10);
+    int initial_state_down = gpio_pin_get_dt(&config->sdio_gpio);
+    printk("  SDIO with pull-down: %d\n", initial_state_down);
+    
     // Configure SDIO as input with pull-up for reading (critical for ADNS5050)
     gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT | GPIO_PULL_UP);
-    k_busy_wait(2); // Allow pin configuration to settle
+    k_busy_wait(10); // Allow pin configuration to settle
+    int initial_state_up = gpio_pin_get_dt(&config->sdio_gpio);
+    printk("  SDIO with pull-up: %d\n", initial_state_up);
+    
+    // Configure without pull for actual reading
+    gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT);
+    k_busy_wait(5);
     
     printk("ADNS5050: Starting serial read - ");
     
@@ -88,27 +103,41 @@ static uint8_t adns5050_serial_read(const struct device *dev) {
     for (int i = 7; i >= 0; i--) {
         // Set clock low first and wait
         gpio_pin_set_dt(&config->sclk_gpio, 0);
-        k_busy_wait(2); // Increased delay for stability
+        k_busy_wait(3); // Longer setup time
+        
+        // Check SDIO state before clock edge
+        int pre_clock_state = gpio_pin_get_dt(&config->sdio_gpio);
         
         // Set clock high to trigger data
         gpio_pin_set_dt(&config->sclk_gpio, 1);
-        k_busy_wait(1); // Setup time
+        k_busy_wait(3); // Longer setup time
         
         // Read data bit after clock edge
         int bit_val = gpio_pin_get_dt(&config->sdio_gpio);
         if (bit_val) {
             data |= (1 << i);
         }
-        printk("%d", bit_val); // Debug: print each bit
         
-        k_busy_wait(2); // Hold time
+        // Show bit transition for debugging
+        if (i == 7) { // Only for first bit to avoid too much output
+            printk("(pre:%d->post:%d)", pre_clock_state, bit_val);
+        }
+        printk("%d", bit_val);
+        
+        k_busy_wait(3); // Hold time
     }
     
     // Leave clock low after transmission
     gpio_pin_set_dt(&config->sclk_gpio, 0);
-    k_busy_wait(2);
+    k_busy_wait(5);
     
     printk(" = 0x%02x\n", data);
+    
+    // Final diagnostic - check if SDIO is completely unresponsive
+    if (data == 0xff) {
+        printk("ADNS5050: WARNING - All bits read as 1, possible hardware issue!\n");
+    }
+    
     return data;
 }
 
@@ -369,17 +398,43 @@ static int adns5050_async_init_configure(const struct device *dev) {
     gpio_pin_set_dt(&config->sclk_gpio, 0);
     printk("ADNS5050: SCLK GPIO test completed\n");
     
-    // Test SDIO GPIO
-    printk("ADNS5050: Testing SDIO GPIO...\n");
+    // Test SDIO GPIO with comprehensive diagnostics
+    printk("ADNS5050: Testing SDIO GPIO comprehensively...\n");
+    
+    // Test 1: Output mode
     gpio_pin_configure_dt(&config->sdio_gpio, GPIO_OUTPUT);
     gpio_pin_set_dt(&config->sdio_gpio, 0);
     k_msleep(1);
     gpio_pin_set_dt(&config->sdio_gpio, 1);
     k_msleep(1);
+    printk("ADNS5050: SDIO output test completed\n");
+    
+    // Test 2: Input with pull-up
     gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT | GPIO_PULL_UP);
     k_msleep(1);
-    int sdio_state = gpio_pin_get_dt(&config->sdio_gpio);
-    printk("ADNS5050: SDIO GPIO test completed (pulled-up state: %d)\n", sdio_state);
+    int sdio_pullup = gpio_pin_get_dt(&config->sdio_gpio);
+    printk("ADNS5050: SDIO with pull-up: %d\n", sdio_pullup);
+    
+    // Test 3: Input with pull-down
+    gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT | GPIO_PULL_DOWN);
+    k_msleep(1);
+    int sdio_pulldown = gpio_pin_get_dt(&config->sdio_gpio);
+    printk("ADNS5050: SDIO with pull-down: %d\n", sdio_pulldown);
+    
+    // Test 4: Input floating (no pull)
+    gpio_pin_configure_dt(&config->sdio_gpio, GPIO_INPUT);
+    k_msleep(1);
+    int sdio_floating = gpio_pin_get_dt(&config->sdio_gpio);
+    printk("ADNS5050: SDIO floating: %d\n", sdio_floating);
+    
+    // Test 5: Check if SDIO line is stuck high
+    if (sdio_pullup == 1 && sdio_pulldown == 1 && sdio_floating == 1) {
+        LOG_ERR("SDIO pin is stuck HIGH - possible hardware issue!");
+    } else if (sdio_pullup == 0 && sdio_pulldown == 0 && sdio_floating == 0) {
+        LOG_ERR("SDIO pin is stuck LOW - possible hardware issue!");
+    } else {
+        printk("ADNS5050: SDIO pin appears to be working correctly\n");
+    }
 
     // Check GPIO readiness
     if (!device_is_ready(config->sclk_gpio.port)) {
@@ -392,6 +447,40 @@ static int adns5050_async_init_configure(const struct device *dev) {
     }
     printk("ADNS5050: All GPIO devices are ready\n");
 
+    // Additional hardware diagnostic before product ID check
+    printk("ADNS5050: Performing final hardware diagnostic...\n");
+    
+    // Try a simple register access pattern to see if any response
+    printk("ADNS5050: Testing basic register access pattern:\n");
+    uint8_t test_values[4];
+    for (int i = 0; i < 4; i++) {
+        reg_read(dev, i, &test_values[i]);
+        printk("  Register 0x%02x = 0x%02x\n", i, test_values[i]);
+        k_msleep(10);
+    }
+    
+    // Check if we get any variation in responses
+    bool all_same = true;
+    for (int i = 1; i < 4; i++) {
+        if (test_values[i] != test_values[0]) {
+            all_same = false;
+            break;
+        }
+    }
+    
+    if (all_same && test_values[0] == 0xff) {
+        LOG_ERR("All registers return 0xff - HARDWARE PROBLEM!");
+        LOG_ERR("Possible causes:");
+        LOG_ERR("1. ADNS5050 not connected to SDIO pin");
+        LOG_ERR("2. ADNS5050 not powered");
+        LOG_ERR("3. Wrong GPIO pin assignment in DTS");
+        LOG_ERR("4. ADNS5050 chip failure");
+        return -ENODEV;
+    } else if (all_same && test_values[0] == 0x00) {
+        LOG_ERR("All registers return 0x00 - SDIO stuck LOW!");
+        return -ENODEV;
+    }
+    
     // Check product ID
     err = check_product_id(dev);
     if (err) {
@@ -592,10 +681,18 @@ static int adns5050_init(const struct device *dev) {
     const struct pixart_config *config = dev->config;
     int err;
 
-    printk("ADNS5050: GPIO pins - SCLK: %p:%d, SDIO: %p:%d, CS: %p:%d\n", 
-           config->sclk_gpio.port, config->sclk_gpio.pin,
-           config->sdio_gpio.port, config->sdio_gpio.pin,
-           config->cs_gpio.port, config->cs_gpio.pin);
+    printk("ADNS5050: GPIO pins configuration:\n");
+    printk("  SCLK: %s pin %d\n", config->sclk_gpio.port->name, config->sclk_gpio.pin);
+    printk("  SDIO: %s pin %d\n", config->sdio_gpio.port->name, config->sdio_gpio.pin);
+    printk("  CS:   %s pin %d\n", config->cs_gpio.port->name, config->cs_gpio.pin);
+    
+    // Validate GPIO pins are different
+    if (config->sclk_gpio.pin == config->sdio_gpio.pin || 
+        config->sclk_gpio.pin == config->cs_gpio.pin ||
+        config->sdio_gpio.pin == config->cs_gpio.pin) {
+        LOG_ERR("GPIO pin conflict detected in DTS configuration!");
+        return -EINVAL;
+    }
 
     // init device pointer
     data->dev = dev;
