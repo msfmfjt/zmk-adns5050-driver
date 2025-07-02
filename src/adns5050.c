@@ -153,7 +153,7 @@ enum adns5050_init_step {
 
 /* Timings (in ms) needed in between steps to allow each step finishes successfully. */
 static const int32_t async_init_delay[ASYNC_INIT_STEP_COUNT] = {
-    [ASYNC_INIT_STEP_POWER_UP] = 50,   // ADNS5050 power-up time
+    [ASYNC_INIT_STEP_POWER_UP] = 500,   // Extended ADNS5050 reset stabilization time
     [ASYNC_INIT_STEP_CONFIGURE] = 0,
 };
 
@@ -167,47 +167,50 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 //////// Function definitions //////////
 
-// GPIO-based register read function
+// GPIO-based register read function with ADNS5050 specific timing
 static int reg_read(const struct device *dev, uint8_t reg, uint8_t *buf) {
     printk("ADNS5050: GPIO reg_read - register 0x%02x\\n", reg);
     
-    // Select chip
+    // Select chip with proper setup time
     adns5050_cs_select(dev);
-    k_busy_wait(1); // 1μs delay after CS select
+    k_busy_wait(10); // Extended CS setup time for ADNS5050
     
     // Send register address (read command)
     adns5050_serial_write(dev, reg);
-    k_busy_wait(160); // 160μs delay (increased for better stability)
+    
+    // CRITICAL: ADNS5050 needs extended delay after address before read
+    k_busy_wait(200); // 200μs delay (ADNS5050 specific requirement)
     
     // Read data
     *buf = adns5050_serial_read(dev);
     
-    // Deselect chip
+    // Deselect chip with proper hold time
     adns5050_cs_deselect(dev);
-    k_busy_wait(20); // 20μs delay (t_SRX from QMK)
+    k_busy_wait(50); // Extended recovery time between operations
     
     printk("ADNS5050: GPIO reg_read - register 0x%02x = 0x%02x\\n", reg, *buf);
     return 0;
 }
 
-// GPIO-based register write function
+// GPIO-based register write function with ADNS5050 specific timing
 static int reg_write(const struct device *dev, uint8_t reg, uint8_t val) {
     printk("ADNS5050: GPIO reg_write - register 0x%02x = 0x%02x\\n", reg, val);
     
-    // Select chip
+    // Select chip with proper setup time
     adns5050_cs_select(dev);
-    k_busy_wait(1); // 1μs delay after CS select
+    k_busy_wait(10); // Extended CS setup time for ADNS5050
     
     // Send register address with write bit (0x80)
     adns5050_serial_write(dev, reg | 0x80);
+    k_busy_wait(5); // Brief pause between address and data
     
     // Send data
     adns5050_serial_write(dev, val);
-    k_busy_wait(35); // 35μs delay (t_SCLK_NCS_WR from QMK)
+    k_busy_wait(50); // Extended delay after data (ADNS5050 write completion time)
     
-    // Deselect chip
+    // Deselect chip with extended recovery time
     adns5050_cs_deselect(dev);
-    k_busy_wait(180); // 180μs delay (t_SWX from QMK)
+    k_busy_wait(250); // Extended recovery time for write operations (ADNS5050 specific)
     
     return 0;
 }
@@ -264,41 +267,66 @@ static int motion_burst_read_legacy(const struct device *dev, uint8_t *buf, size
 static int check_product_id(const struct device *dev) {
     uint8_t product_id = 0x01;
     
-    printk("ADNS5050: Attempting to read product ID...\n");
+    printk("ADNS5050: Post-reset product ID verification...\n");
     
-    // Extended stabilization time after reset
-    k_msleep(200);
+    // CRITICAL: Extended stabilization time after reset (ADNS5050 requirement)
+    printk("ADNS5050: Waiting for device stabilization after reset...\n");
+    k_msleep(500); // Minimum 500ms after reset
     
-    // Wake up device with multiple dummy reads
+    // Extended wake-up sequence with motion register
+    printk("ADNS5050: Performing extended wake-up sequence...\n");
     uint8_t dummy;
-    for (int i = 0; i < 3; i++) {
-        reg_read(dev, ADNS5050_REG_MOTION, &dummy);
-        k_msleep(10);
-    }
-    
-    // Try multiple reads with increasing delays
-    for (int attempt = 0; attempt < 5; attempt++) {
-        printk("ADNS5050: Read attempt %d\n", attempt + 1);
-        
-        // Additional wake-up read before product ID read
+    for (int i = 0; i < 10; i++) {
         reg_read(dev, ADNS5050_REG_MOTION, &dummy);
         k_msleep(20);
+        printk("ADNS5050: Wake-up motion read %d: 0x%02x\n", i + 1, dummy);
         
-        // Try reading multiple registers for diagnosis
-        uint8_t revision_id = 0;
-        int err1 = reg_read(dev, ADNS5050_REG_REVISION_ID, &revision_id);
-        k_msleep(10);
+        // Check if device is responding (not stuck at 0x00)
+        if (dummy != 0x00) {
+            printk("ADNS5050: Device response detected!\n");
+            break;
+        }
+    }
+    
+    // Additional stabilization delay
+    k_msleep(100);
+    
+    // Try multiple reads with extensive diagnostics
+    for (int attempt = 0; attempt < 8; attempt++) {
+        printk("ADNS5050: Product ID read attempt %d\n", attempt + 1);
         
-        int err2 = reg_read(dev, ADNS5050_REG_PRODUCT_ID, &product_id);
+        // Pre-read wake-up
+        for (int j = 0; j < 3; j++) {
+            reg_read(dev, ADNS5050_REG_MOTION, &dummy);
+            k_msleep(10);
+        }
         
-        printk("ADNS5050: Attempt %d - Read results:\n", attempt + 1);
-        printk("  Revision ID: 0x%02x (err: %d)\n", revision_id, err1);
-        printk("  Product ID: 0x%02x (err: %d, expected: 0x%02x)\n", product_id, err2, ADNS5050_PRODUCT_ID);
+        // Try reading multiple registers for comprehensive diagnosis
+        uint8_t motion_reg = 0, revision_id = 0, squal_reg = 0;
         
-        if (err2) {
-            printk("ADNS5050: GPIO read error: %d\n", err2);
-            k_msleep(100);
+        int err_motion = reg_read(dev, ADNS5050_REG_MOTION, &motion_reg);
+        k_msleep(20);
+        int err_revision = reg_read(dev, ADNS5050_REG_REVISION_ID, &revision_id);
+        k_msleep(20);
+        int err_product = reg_read(dev, ADNS5050_REG_PRODUCT_ID, &product_id);
+        k_msleep(20);
+        int err_squal = reg_read(dev, ADNS5050_REG_SQUAL, &squal_reg);
+        
+        printk("ADNS5050: Attempt %d - Comprehensive register read:\n", attempt + 1);
+        printk("  Motion:     0x%02x (err: %d)\n", motion_reg, err_motion);
+        printk("  Revision:   0x%02x (err: %d)\n", revision_id, err_revision);
+        printk("  Product ID: 0x%02x (err: %d, expected: 0x%02x)\n", product_id, err_product, ADNS5050_PRODUCT_ID);
+        printk("  SQUAL:      0x%02x (err: %d)\n", squal_reg, err_squal);
+        
+        if (err_product) {
+            printk("ADNS5050: Communication error: %d\n", err_product);
+            k_msleep(200);
             continue;
+        }
+        
+        // Check if we're getting any non-zero responses
+        if (motion_reg != 0x00 || revision_id != 0x00 || product_id != 0x00 || squal_reg != 0x00) {
+            printk("ADNS5050: Device is responding! (not all zeros)\n");
         }
                
         if (product_id == ADNS5050_PRODUCT_ID) {
@@ -306,11 +334,13 @@ static int check_product_id(const struct device *dev) {
             return 0;
         }
         
-        // Progressive delay increase
-        k_msleep(50 + (attempt * 25));
+        // Progressive delay increase with maximum cap
+        int delay = 100 + (attempt * 50);
+        if (delay > 500) delay = 500;
+        k_msleep(delay);
     }
 
-    LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, ADNS5050_PRODUCT_ID);
+    LOG_ERR("Product ID verification failed - final value: 0x%x (expected: 0x%x)", product_id, ADNS5050_PRODUCT_ID);
     return -EIO;
 }
 
@@ -347,18 +377,37 @@ static int set_downshift_time(const struct device *dev, uint8_t reg_addr, uint32
 static int adns5050_async_init_power_up(const struct device *dev) {
     LOG_INF("ADNS5050 async_init_power_up");
 
-    /* Reset GPIO state and ensure clean startup */
+    /* ADNS5050 specific startup sequence */
+    printk("ADNS5050: Starting power-up sequence...\n");
+    
+    /* Step 1: Ensure CS is deselected for extended period */
     adns5050_cs_deselect(dev);
-    k_msleep(10); // Increased delay for power stabilization
-    adns5050_cs_select(dev);
-    k_msleep(10);
-    adns5050_cs_deselect(dev);
-    k_msleep(10);
-
-    /* Wake up device with dummy read before reset */
+    k_msleep(100); // Extended delay for complete power stabilization
+    
+    /* Step 2: Multiple CS toggle for device wake-up */
+    for (int i = 0; i < 3; i++) {
+        adns5050_cs_select(dev);
+        k_msleep(5);
+        adns5050_cs_deselect(dev);
+        k_msleep(5);
+        printk("ADNS5050: Wake-up cycle %d completed\n", i + 1);
+    }
+    
+    /* Step 3: Final stabilization delay */
+    k_msleep(100);
+    
+    /* Step 4: Try to wake device with motion register access */
+    printk("ADNS5050: Attempting device wake-up...\n");
     uint8_t dummy;
-    reg_read(dev, ADNS5050_REG_PRODUCT_ID, &dummy);
-    k_msleep(50);
+    for (int i = 0; i < 5; i++) {
+        reg_read(dev, ADNS5050_REG_MOTION, &dummy);
+        k_msleep(10);
+        printk("ADNS5050: Wake-up read %d: 0x%02x\n", i + 1, dummy);
+    }
+    
+    /* Step 5: Extended delay before reset command */
+    k_msleep(100);
+    printk("ADNS5050: Sending reset command...\n");
 
     /* Reset the ADNS5050 chip */
     return reg_write(dev, ADNS5050_REG_CHIP_RESET, ADNS5050_RESET_CMD);
