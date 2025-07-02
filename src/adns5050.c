@@ -550,7 +550,7 @@ static int adns5050_init(const struct device *dev) {
                     {                                                                              \
                         .frequency = DT_INST_PROP(n, spi_max_frequency),                           \
                         .operation =                                                               \
-                            SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_MODE_CPOL,    \
+                            SPI_WORD_SET(8) | SPI_TRANSFER_LSB,    \
                         .slave = DT_INST_REG_ADDR(n),                                              \
                     },                                                                             \
             },                                                                                     \
