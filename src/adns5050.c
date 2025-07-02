@@ -29,17 +29,18 @@ static uint8_t adns5050_serial_read(const struct device *dev);
 // GPIO bit-banging implementation
 static void adns5050_cs_select(const struct device *dev) {
     const struct pixart_config *config = dev->config;
-    gpio_pin_set_dt(&config->cs_gpio, 0);  // CS active low
+    // Use logical level - DT spec handles active low/high conversion
+    gpio_pin_set_dt(&config->cs_gpio, 1);  // CS active (logical 1)
     k_busy_wait(2); // CS setup time (critical for ADNS5050)
-    printk("ADNS5050: CS selected (LOW)\n");
+    printk("ADNS5050: CS selected (ACTIVE)\n");
 }
 
 static void adns5050_cs_deselect(const struct device *dev) {
     const struct pixart_config *config = dev->config;
     k_busy_wait(2); // CS hold time before release
-    gpio_pin_set_dt(&config->cs_gpio, 1);  // CS inactive high
+    gpio_pin_set_dt(&config->cs_gpio, 0);  // CS inactive (logical 0)
     k_busy_wait(2); // CS recovery time
-    printk("ADNS5050: CS deselected (HIGH)\n");
+    printk("ADNS5050: CS deselected (INACTIVE)\n");
 }
 
 static void adns5050_serial_write(const struct device *dev, uint8_t data) {
@@ -371,22 +372,22 @@ static int adns5050_async_init_configure(const struct device *dev) {
 
     int err = 0;
 
-    // Test CS GPIO functionality with readback
+    // Test CS GPIO functionality with proper logical levels
     printk("ADNS5050: Testing CS GPIO control...\n");
-    err = gpio_pin_set_dt(&config->cs_gpio, 1);
+    err = gpio_pin_set_dt(&config->cs_gpio, 1);  // Logical 1 (active)
     if (err) {
-        printk("ADNS5050: CS GPIO set HIGH failed: %d\n", err);
+        printk("ADNS5050: CS GPIO set ACTIVE failed: %d\n", err);
     } else {
-        printk("ADNS5050: CS GPIO set HIGH successful\n");
+        printk("ADNS5050: CS GPIO set ACTIVE successful\n");
     }
     
     k_msleep(1);
     
-    err = gpio_pin_set_dt(&config->cs_gpio, 0);
+    err = gpio_pin_set_dt(&config->cs_gpio, 0);  // Logical 0 (inactive)
     if (err) {
-        printk("ADNS5050: CS GPIO set LOW failed: %d\n", err);
+        printk("ADNS5050: CS GPIO set INACTIVE failed: %d\n", err);
     } else {
-        printk("ADNS5050: CS GPIO set LOW successful\n");
+        printk("ADNS5050: CS GPIO set INACTIVE successful\n");
     }
     
     // Test SCLK GPIO
@@ -720,7 +721,7 @@ static int adns5050_init(const struct device *dev) {
         return -ENODEV;
     }
 
-    // Configure CS pin as output (inactive high)
+    // Configure CS pin as output (inactive = logical 0, which becomes physical HIGH due to ACTIVE_LOW)
     err = gpio_pin_configure_dt(&config->cs_gpio, GPIO_OUTPUT_INACTIVE);
     if (err) {
         LOG_ERR("Cannot configure CS GPIO");
