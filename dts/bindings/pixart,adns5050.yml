@@ -1,18 +1,37 @@
 description: |
   Sensor driver for the ADNS5050 optical mouse sensor
+  Uses GPIO bit-banging communication (no SPI required)
   Uses polling-based operation (no IRQ pin required)
 
 compatible: "pixart,adns5050"
 
-include: spi-device.yaml
-
 properties:
+  sclk-gpios:
+    type: phandle-array
+    required: true
+    description: Serial clock GPIO pin
+
+  sdio-gpios:
+    type: phandle-array
+    required: true
+    description: Serial data I/O GPIO pin
+
+  cs-gpios:
+    type: phandle-array
+    required: true
+    description: Chip select GPIO pin
+
   scroll-layers:
     type: array
     default: []
+    description: Layers where trackball acts as scroll wheel
+
   snipe-layers:
     type: array
     default: []
+    description: Layers where trackball has reduced sensitivity
+
   automouse-layer:
     type: int
     default: -1
+    description: Layer to activate automatically on mouse movement
