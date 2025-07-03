@@ -431,3 +431,168 @@ static int adns5050_pm_action(const struct device *dev, enum pm_device_action ac
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(ADNS5050_INIT)
+
+/*
+ * ADNS5050 デバッグテストプログラム
+ * このコードをadns5050.cの最後に追加してテスト
+ */
+
+#include <zephyr/shell/shell.h>
+
+static int cmd_adns5050_test(const struct shell *shell, size_t argc, char **argv)
+{
+    const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(trackball));
+    int ret;
+    uint8_t val;
+    
+    if (!device_is_ready(dev)) {
+        shell_error(shell, "ADNS5050 device not ready");
+        return -ENODEV;
+    }
+    
+    shell_print(shell, "=== ADNS5050 Debug Test ===");
+    
+    /* Product ID読み取りテスト */
+    ret = adns5050_read_reg(dev, ADNS5050_REG_PRODUCT_ID, &val);
+    if (ret < 0) {
+        shell_error(shell, "Failed to read Product ID: %d", ret);
+        return ret;
+    }
+    shell_print(shell, "Product ID: 0x%02x (expected 0x12)", val);
+    
+    /* Product ID2読み取りテスト */
+    ret = adns5050_read_reg(dev, ADNS5050_REG_PRODUCT_ID2, &val);
+    if (ret < 0) {
+        shell_error(shell, "Failed to read Product ID2: %d", ret);
+        return ret;
+    }
+    shell_print(shell, "Product ID2: 0x%02x (expected 0x26)", val);
+    
+    /* Revision ID読み取りテスト */
+    ret = adns5050_read_reg(dev, ADNS5050_REG_REVISION_ID, &val);
+    if (ret < 0) {
+        shell_error(shell, "Failed to read Revision ID: %d", ret);
+        return ret;
+    }
+    shell_print(shell, "Revision ID: 0x%02x", val);
+    
+    /* Motion Status読み取りテスト */
+    ret = adns5050_read_reg(dev, ADNS5050_REG_MOTION, &val);
+    if (ret < 0) {
+        shell_error(shell, "Failed to read Motion register: %d", ret);
+        return ret;
+    }
+    shell_print(shell, "Motion register: 0x%02x (bit 7 set = motion detected)", val);
+    
+    /* SQUALテスト */
+    ret = adns5050_read_reg(dev, ADNS5050_REG_SQUAL, &val);
+    if (ret < 0) {
+        shell_error(shell, "Failed to read SQUAL: %d", ret);
+        return ret;
+    }
+    shell_print(shell, "SQUAL (surface quality): %d/128", val);
+    
+    return 0;
+}
+
+static int cmd_adns5050_motion(const struct shell *shell, size_t argc, char **argv)
+{
+    const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(trackball));
+    int ret;
+    int16_t x, y;
+    int count = 10;
+    
+    if (argc > 1) {
+        count = atoi(argv[1]);
+    }
+    
+    shell_print(shell, "Reading motion data %d times...", count);
+    
+    for (int i = 0; i < count; i++) {
+        ret = adns5050_motion_burst_read(dev, &x, &y);
+        if (ret < 0) {
+            shell_error(shell, "Failed to read motion: %d", ret);
+            return ret;
+        }
+        
+        if (x != 0 || y != 0) {
+            shell_print(shell, "[%d] X: %d, Y: %d", i, x, y);
+        }
+        
+        k_sleep(K_MSEC(100));
+    }
+    
+    return 0;
+}
+
+static int cmd_adns5050_spi_test(const struct shell *shell, size_t argc, char **argv)
+{
+    const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(trackball));
+    const struct adns5050_config *cfg = dev->config;
+    int ret;
+    uint8_t tx_buf[2];
+    uint8_t rx_buf[2];
+    
+    shell_print(shell, "=== SPI Communication Test ===");
+    
+    /* 基本的なSPI通信テスト */
+    tx_buf[0] = 0x00; /* Product ID register (read) */
+    tx_buf[1] = 0x00;
+    
+    const struct spi_buf tx_bufs[] = {
+        {.buf = tx_buf, .len = 2}
+    };
+    const struct spi_buf_set tx = {
+        .buffers = tx_bufs,
+        .count = 1
+    };
+    
+    const struct spi_buf rx_bufs[] = {
+        {.buf = rx_buf, .len = 2}
+    };
+    const struct spi_buf_set rx = {
+        .buffers = rx_bufs,
+        .count = 1
+    };
+    
+    shell_print(shell, "Sending: 0x%02x 0x%02x", tx_buf[0], tx_buf[1]);
+    
+    ret = spi_transceive_dt(&cfg->spi, &tx, &rx);
+    if (ret < 0) {
+        shell_error(shell, "SPI transceive failed: %d", ret);
+        return ret;
+    }
+    
+    shell_print(shell, "Received: 0x%02x 0x%02x", rx_buf[0], rx_buf[1]);
+    
+    return 0;
+}
+
+static int cmd_adns5050_reset(const struct shell *shell, size_t argc, char **argv)
+{
+    const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(trackball));
+    int ret;
+    
+    shell_print(shell, "Resetting ADNS5050...");
+    
+    ret = adns5050_write_reg(dev, ADNS5050_REG_CHIP_RESET, ADNS5050_RESET_VALUE);
+    if (ret < 0) {
+        shell_error(shell, "Reset failed: %d", ret);
+        return ret;
+    }
+    
+    k_sleep(K_MSEC(55));
+    shell_print(shell, "Reset complete");
+    
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(adns5050_cmds,
+    SHELL_CMD(test, NULL, "Basic ADNS5050 test", cmd_adns5050_test),
+    SHELL_CMD(motion, NULL, "Read motion data [count]", cmd_adns5050_motion),
+    SHELL_CMD(spi, NULL, "Test SPI communication", cmd_adns5050_spi_test),
+    SHELL_CMD(reset, NULL, "Reset ADNS5050", cmd_adns5050_reset),
+    SHELL_SUBCMD_SET_END
+);
+
+SHELL_CMD_REGISTER(adns5050, &adns5050_cmds, "ADNS5050 debug commands", NULL);
